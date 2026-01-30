@@ -6,11 +6,11 @@ After=network.target
 Type=simple
 User=yimaru
 Group=yimaru
-WorkingDirectory=/home/yimaru/yimaru_services/yimaru_cicd
+WorkingDirectory=/home/yimaru/Yimaru-CICD
 Environment="NODE_ENV=production"
-Environment="PATH=/home/yimaru/.bun/bin:/home/yimaru/.nvm/versions/node/v20/bin:/home/yimaru/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PATH=/home/yimaru/.bun/bin:/home/yimaru/.local/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=/home/yimaru/yimaru_services/yimaru_cicd/.env
-ExecStart=/home/yimaru/.bun/bin/bun dist/index.js
+ExecStart=/home/yimaru/.bun/bin/bun yimaru_admin/index.js
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -22,7 +22,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/yimaru/yimaru_services/yimaru_cicd /home/yimaru/.npm /var/www/html
+ReadWritePaths=/home/yimaru/Yimaru-CICD /home/yimaru/.npm /var/www/html
 
 # Resource limits
 LimitNOFILE=65536
