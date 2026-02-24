@@ -55,7 +55,7 @@ const env: EnvConfig = loadEnvConfig();
 initializeDatabase(process.env.DB_PATH);
 
 // ============================================================================
-// Deploy Functions for Each Repository
+// Repository Metadata Resolution
 // ============================================================================
 
 interface RepoMetadata {
@@ -111,64 +111,149 @@ function extractOrganizationAndRepo(repoPath: string, localPath: string): { orga
     return { organization: "", repoName: basename(localPath) };
 }
 
-function createPullOnlyDeploy(
-    label: string,
-    repoPath: string,
-    localPath: string
-): DeployFunction {
-    return async (
-        branch?: string,
-        commitHash?: string,
-        existingDeploymentId?: number
-    ): Promise<{ success: boolean; message: string; deploymentId?: number }> => {
-        const repository = repoPath.replace(/\.git$/, "");
-        const deploymentId = existingDeploymentId ?? createDeployment(repository, branch, commitHash, "in_progress");
-        if (existingDeploymentId) updateDeploymentStatus(deploymentId, "in_progress");
+const adminRepo = resolveRepoMetadata(env.yimaruAdminPath, "Yimaru Admin");
+const backendRepo = resolveRepoMetadata(env.yimaruBackendPath, "Yimaru Backend");
 
-        console.log(`Starting deployment for ${label} (Deployment ID: ${deploymentId})...`);
+// ============================================================================
+// Deploy Functions for Each Repository
+// ============================================================================
 
-        try {
-            const gitResult = await gitPullWithAuth(
-                repoPath,
-                localPath,
-                deploymentId,
-                env.productionBranch,
-                env.giteaUsername,
-                env.giteaPassword
-            );
+async function deployYimaruAdmin(
+    branch?: string,
+    commitHash?: string,
+    existingDeploymentId?: number
+): Promise<{ success: boolean; message: string; deploymentId?: number }> {
+    const repository = `${adminRepo.organization}/${adminRepo.repoName}`;
+    const repoPath = env.yimaruAdminPath;
+    const targetPath = "/var/www/html/yimaru_admin";
 
-            if (!gitResult.success) {
-                updateDeploymentStatus(deploymentId, "failed");
-                return { success: false, message: gitResult.error!, deploymentId };
-            }
+    const deploymentId = existingDeploymentId ?? createDeployment(repository, branch, commitHash, "in_progress");
+    if (existingDeploymentId) updateDeploymentStatus(deploymentId, "in_progress");
 
-            console.log(`✅ Deployment successful`);
-            updateDeploymentStatus(deploymentId, "success");
-            return { success: true, message: `Successfully updated ${label}`, deploymentId };
-        } catch (error) {
+    console.log(`Starting deployment for Yimaru Admin (Deployment ID: ${deploymentId})...`);
+
+    try {
+        const gitResult = await gitPullWithAuth(
+            adminRepo.repoPath,
+            repoPath,
+            deploymentId,
+            env.productionBranch,
+            env.giteaUsername,
+            env.giteaPassword
+        );
+        if (!gitResult.success) {
             updateDeploymentStatus(deploymentId, "failed");
-            return { success: false, message: `Deployment failed: ${error instanceof Error ? error.message : String(error)}`, deploymentId };
+            return { success: false, message: gitResult.error!, deploymentId };
         }
-    };
+
+        console.log(`Installing dependencies...`);
+        const installResult = await execCommand("bun install", repoPath, deploymentId);
+        if (!installResult.success) {
+            updateDeploymentStatus(deploymentId, "failed");
+            return { success: false, message: `bun install failed: ${installResult.error || installResult.output}`, deploymentId };
+        }
+
+        console.log(`Building project...`);
+        const buildResult = await execCommand("bun run build", repoPath, deploymentId);
+        if (!buildResult.success) {
+            updateDeploymentStatus(deploymentId, "failed");
+            return { success: false, message: `bun run build failed: ${buildResult.error || buildResult.output}`, deploymentId };
+        }
+
+        console.log(`Removing existing ${targetPath}...`);
+        const deleteResult = await execCommand(`sudo rm -rf "${targetPath}"`, undefined, deploymentId);
+        if (!deleteResult.success) {
+            updateDeploymentStatus(deploymentId, "failed");
+            return { success: false, message: `Failed to delete ${targetPath}: ${deleteResult.error || deleteResult.output}`, deploymentId };
+        }
+
+        console.log(`Moving dist to ${targetPath}...`);
+        const moveResult = await execCommand(`sudo mv "${repoPath}/dist" "${targetPath}"`, undefined, deploymentId);
+        if (!moveResult.success) {
+            updateDeploymentStatus(deploymentId, "failed");
+            return { success: false, message: `Failed to move dist: ${moveResult.error || moveResult.output}`, deploymentId };
+        }
+
+        console.log(`Restarting nginx...`);
+        const nginxResult = await execCommand("sudo systemctl restart nginx", undefined, deploymentId);
+        if (!nginxResult.success) {
+            updateDeploymentStatus(deploymentId, "failed");
+            return { success: false, message: `Failed to restart nginx: ${nginxResult.error || nginxResult.output}`, deploymentId };
+        }
+
+        console.log(`✅ Deployment successful`);
+        updateDeploymentStatus(deploymentId, "success");
+        return { success: true, message: "Successfully deployed Yimaru Admin", deploymentId };
+    } catch (error) {
+        updateDeploymentStatus(deploymentId, "failed");
+        return { success: false, message: `Deployment failed: ${error instanceof Error ? error.message : String(error)}`, deploymentId };
+    }
+}
+
+async function deployYimaruBackend(
+    branch?: string,
+    commitHash?: string,
+    existingDeploymentId?: number
+): Promise<{ success: boolean; message: string; deploymentId?: number }> {
+    const repository = `${backendRepo.organization}/${backendRepo.repoName}`;
+    const repoPath = env.yimaruBackendPath;
+
+    const deploymentId = existingDeploymentId ?? createDeployment(repository, branch, commitHash, "in_progress");
+    if (existingDeploymentId) updateDeploymentStatus(deploymentId, "in_progress");
+
+    console.log(`Starting deployment for Yimaru Backend (Deployment ID: ${deploymentId})...`);
+
+    try {
+        const gitResult = await gitPullWithAuth(
+            backendRepo.repoPath,
+            repoPath,
+            deploymentId,
+            env.productionBranch,
+            env.giteaUsername,
+            env.giteaPassword
+        );
+        if (!gitResult.success) {
+            updateDeploymentStatus(deploymentId, "failed");
+            return { success: false, message: gitResult.error!, deploymentId };
+        }
+
+        console.log(`Installing dependencies...`);
+        const installResult = await execCommand("bun install", repoPath, deploymentId);
+        if (!installResult.success) {
+            updateDeploymentStatus(deploymentId, "failed");
+            return { success: false, message: `bun install failed: ${installResult.error || installResult.output}`, deploymentId };
+        }
+
+        console.log(`Restarting Yimaru Backend service...`);
+        const restartResult = await execCommand("sudo systemctl restart yimaru-backend", undefined, deploymentId);
+        if (!restartResult.success) {
+            updateDeploymentStatus(deploymentId, "failed");
+            return { success: false, message: `Failed to restart service: ${restartResult.error || restartResult.output}`, deploymentId };
+        }
+
+        console.log(`✅ Deployment successful`);
+        updateDeploymentStatus(deploymentId, "success");
+        return { success: true, message: "Successfully deployed Yimaru Backend", deploymentId };
+    } catch (error) {
+        updateDeploymentStatus(deploymentId, "failed");
+        return { success: false, message: `Deployment failed: ${error instanceof Error ? error.message : String(error)}`, deploymentId };
+    }
 }
 
 // ============================================================================
 // Repository Configuration
 // ============================================================================
 
-const adminRepo = resolveRepoMetadata(env.yimaruAdminPath, "Yimaru Admin");
-const backendRepo = resolveRepoMetadata(env.yimaruBackendPath, "Yimaru Backend");
-
 const REPO_CONFIGS: RepoEntry[] = [
     {
         repoName: adminRepo.repoName,
         organization: adminRepo.organization,
-        deploy: createPullOnlyDeploy("Yimaru Admin", adminRepo.repoPath, env.yimaruAdminPath),
+        deploy: deployYimaruAdmin,
     },
     {
         repoName: backendRepo.repoName,
         organization: backendRepo.organization,
-        deploy: createPullOnlyDeploy("Yimaru Backend", backendRepo.repoPath, env.yimaruBackendPath),
+        deploy: deployYimaruBackend,
     },
 ];
 
