@@ -197,6 +197,8 @@ async function deployYimaruBackend(
 ): Promise<{ success: boolean; message: string; deploymentId?: number }> {
     const repository = `${backendRepo.organization}/${backendRepo.repoName}`;
     const repoPath = env.yimaruBackendPath;
+    const home = "/home/yimaru";
+    const goEnv = `export GOPATH=${home}/go GOROOT=/usr/local/go PATH=/usr/local/go/bin:${home}/go/bin:$PATH`;
 
     const deploymentId = existingDeploymentId ?? createDeployment(repository, branch, commitHash, "in_progress");
     if (existingDeploymentId) updateDeploymentStatus(deploymentId, "in_progress");
@@ -204,6 +206,7 @@ async function deployYimaruBackend(
     console.log(`Starting deployment for Yimaru Backend (Deployment ID: ${deploymentId})...`);
 
     try {
+        // Git pull
         const gitResult = await gitPullWithAuth(
             backendRepo.repoPath,
             repoPath,
@@ -217,15 +220,74 @@ async function deployYimaruBackend(
             return { success: false, message: gitResult.error!, deploymentId };
         }
 
-        console.log(`Installing dependencies...`);
-        const installResult = await execCommand("bun install", repoPath, deploymentId);
-        if (!installResult.success) {
+        // Go mod tidy
+        console.log(`Tidying Go modules...`);
+        const tidyResult = await execCommand(`${goEnv} && go mod tidy`, repoPath, deploymentId);
+        if (!tidyResult.success) {
             updateDeploymentStatus(deploymentId, "failed");
-            return { success: false, message: `bun install failed: ${installResult.error || installResult.output}`, deploymentId };
+            return { success: false, message: `go mod tidy failed: ${tidyResult.error || tidyResult.output}`, deploymentId };
         }
 
+        // Stop service before DB operations
+        console.log(`Stopping Yimaru Backend service...`);
+        await execCommand("sudo systemctl stop yimaru-backend.service", undefined, deploymentId);
+
+        // Database backup → migrate → restore → seed
+        console.log(`Backing up database...`);
+        const backupResult = await execCommand("make backup", repoPath, deploymentId);
+        if (!backupResult.success) {
+            updateDeploymentStatus(deploymentId, "failed");
+            return { success: false, message: `make backup failed: ${backupResult.error || backupResult.output}`, deploymentId };
+        }
+
+        console.log(`Running db-down...`);
+        const dbDownResult = await execCommand("make db-down", repoPath, deploymentId);
+        if (!dbDownResult.success) {
+            updateDeploymentStatus(deploymentId, "failed");
+            return { success: false, message: `make db-down failed: ${dbDownResult.error || dbDownResult.output}`, deploymentId };
+        }
+
+        console.log(`Running db-up...`);
+        const dbUpResult = await execCommand("make db-up", repoPath, deploymentId);
+        if (!dbUpResult.success) {
+            updateDeploymentStatus(deploymentId, "failed");
+            return { success: false, message: `make db-up failed: ${dbUpResult.error || dbUpResult.output}`, deploymentId };
+        }
+
+        // Wait for DB to be ready before restore
+        await execCommand("sleep 5", repoPath, deploymentId);
+
+        console.log(`Restoring database...`);
+        const restoreResult = await execCommand("make restore", repoPath, deploymentId);
+        if (!restoreResult.success) {
+            updateDeploymentStatus(deploymentId, "failed");
+            return { success: false, message: `make restore failed: ${restoreResult.error || restoreResult.output}`, deploymentId };
+        }
+
+        await execCommand("sleep 2", repoPath, deploymentId);
+
+        console.log(`Seeding data...`);
+        const seedResult = await execCommand("make seed_data", repoPath, deploymentId);
+        if (!seedResult.success) {
+            updateDeploymentStatus(deploymentId, "failed");
+            return { success: false, message: `make seed_data failed: ${seedResult.error || seedResult.output}`, deploymentId };
+        }
+
+        // Build Go binary
+        console.log(`Building Go binary...`);
+        const buildResult = await execCommand(
+            `${goEnv} && go build -ldflags='-s' -o ./bin/web ./cmd/main.go`,
+            repoPath,
+            deploymentId
+        );
+        if (!buildResult.success) {
+            updateDeploymentStatus(deploymentId, "failed");
+            return { success: false, message: `go build failed: ${buildResult.error || buildResult.output}`, deploymentId };
+        }
+
+        // Restart service
         console.log(`Restarting Yimaru Backend service...`);
-        const restartResult = await execCommand("sudo systemctl restart yimaru-backend", undefined, deploymentId);
+        const restartResult = await execCommand("sudo systemctl restart yimaru-backend.service", undefined, deploymentId);
         if (!restartResult.success) {
             updateDeploymentStatus(deploymentId, "failed");
             return { success: false, message: `Failed to restart service: ${restartResult.error || restartResult.output}`, deploymentId };
