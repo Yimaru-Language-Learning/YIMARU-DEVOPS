@@ -198,7 +198,7 @@ async function deployYimaruBackend(
     const repository = `${backendRepo.organization}/${backendRepo.repoName}`;
     const repoPath = env.yimaruBackendPath;
     const home = "/home/yimaru";
-    const goEnv = `export GOPATH=${home}/go GOROOT=/usr/local/go PATH=/usr/local/go/bin:${home}/go/bin:$PATH`;
+    const goEnv = `export GOPATH=${home}/go GOROOT=/usr/lib/go-1.24 PATH=/usr/bin:${home}/go/bin:$PATH`;
 
     const deploymentId = existingDeploymentId ?? createDeployment(repository, branch, commitHash, "in_progress");
     if (existingDeploymentId) updateDeploymentStatus(deploymentId, "in_progress");
