@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "build": "bun build index.ts --outdir yimaru_admin --target bun"
+    "build": "bun build index.ts --outdir dist --target bun"
   },
   "devDependencies": {
     "@types/bun": "latest"
