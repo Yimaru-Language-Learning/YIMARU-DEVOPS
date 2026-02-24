@@ -5,8 +5,8 @@ interface LayoutProps {
 
 const styles = `
     :root {
-        --primary-green: #0F7B4A;
-        --primary-green-dark: #0a5c37;
+        --primary-green: #9e2891;
+        --primary-green-dark: #7a1f6f;
         --secondary-orange: #FFB668;
         --secondary-orange-dark: #e9a050;
         --error-red: #EF4444;
@@ -38,7 +38,7 @@ const styles = `
         color: white;
         padding: 20px 0;
         margin-bottom: 30px;
-        box-shadow: 0 2px 8px rgba(15, 123, 74, 0.3);
+        box-shadow: 0 2px 8px rgba(158, 40, 145, 0.3);
     }
     header h1 {
         font-size: 24px;
