@@ -9,7 +9,7 @@ Group=yimaru
 WorkingDirectory=/home/yimaru/Yimaru-CICD
 Environment="NODE_ENV=production"
 Environment="PATH=/home/yimaru/.bun/bin:/home/yimaru/.local/bin:/usr/local/bin:/usr/bin:/bin"
-EnvironmentFile=/home/yimaru/yimaru_services/yimaru_cicd/.env
+EnvironmentFile=/home/yimaru/Yimaru-CICD/.env
 ExecStart=/home/yimaru/.bun/bin/bun yimaru_admin/index.js
 Restart=always
 RestartSec=10
