@@ -9,6 +9,8 @@ Group=yimaru
 WorkingDirectory=/home/yimaru/Yimaru-CICD
 Environment="NODE_ENV=production"
 Environment="PATH=/home/yimaru/.bun/bin:/home/yimaru/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="BUN_TMPDIR=/home/yimaru/Yimaru-CICD/.tmp"
+Environment="BUN_INSTALL=/home/yimaru/.bun"
 EnvironmentFile=/home/yimaru/Yimaru-CICD/.env
 ExecStart=/home/yimaru/.bun/bin/bun dist/index.js
 Restart=always
