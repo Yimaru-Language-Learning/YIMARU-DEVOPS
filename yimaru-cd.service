@@ -24,7 +24,7 @@ NoNewPrivileges=true
 PrivateTmp=false
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/yimaru/Yimaru-CICD /home/yimaru/.npm /var/www/html /home/yimaru/yimaru_admin /home/yimaru/Yimaru-BackEnd
+ReadWritePaths=/tmp /home/yimaru/Yimaru-CICD /home/yimaru/.npm /home/yimaru/.bun /var/www/html /home/yimaru/yimaru_admin /home/yimaru/Yimaru-BackEnd
 
 # Resource limits
 LimitNOFILE=65536
