@@ -20,7 +20,7 @@ StandardError=journal
 SyslogIdentifier=yimaru-cd
 
 # Security settings
-NoNewPrivileges=true
+NoNewPrivileges=false
 PrivateTmp=false
 ProtectSystem=strict
 ProtectHome=read-only
