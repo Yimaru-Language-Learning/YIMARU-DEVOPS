@@ -220,6 +220,13 @@ async function deployYimaruBackend(
             return { success: false, message: gitResult.error!, deploymentId };
         }
 
+        console.log(`Applying docker-compose patch...`);
+        const patchResult = await execCommand("git apply docker-compose.patch", repoPath, deploymentId);
+        if (!patchResult.success) {
+            updateDeploymentStatus(deploymentId, "failed");
+            return { success: false, message: `git apply docker-compose.patch failed: ${patchResult.error || patchResult.output}`, deploymentId };
+        }
+
         // Go mod tidy
         console.log(`Tidying Go modules...`);
         const tidyResult = await execCommand(`${goEnv} && go mod tidy`, repoPath, deploymentId);
