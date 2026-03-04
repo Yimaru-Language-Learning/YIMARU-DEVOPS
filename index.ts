@@ -230,7 +230,7 @@ async function deployYimaruBackend(
 
         // Stop service before DB operations
         console.log(`Stopping Yimaru Backend service...`);
-        await execCommand("sudo systemctl stop yimaru-backend.service", undefined, deploymentId);
+        await execCommand("sudo systemctl stop yimaru_backend.service", undefined, deploymentId);
 
         // Database backup → migrate → restore → seed
         console.log(`Backing up database...`);
@@ -287,7 +287,7 @@ async function deployYimaruBackend(
 
         // Restart service
         console.log(`Restarting Yimaru Backend service...`);
-        const restartResult = await execCommand("sudo systemctl restart yimaru-backend.service", undefined, deploymentId);
+        const restartResult = await execCommand("sudo systemctl restart yimaru_backend.service", undefined, deploymentId);
         if (!restartResult.success) {
             updateDeploymentStatus(deploymentId, "failed");
             return { success: false, message: `Failed to restart service: ${restartResult.error || restartResult.output}`, deploymentId };
