@@ -329,12 +329,12 @@ async function deployYimaruBackend(
             return { success: false, message: `go build failed: ${buildResult.error || buildResult.output}`, deploymentId };
         }
 
-        // console.log(`Seeding database SQL files...`);
-        // const seedResult = await seedBackendSqlFiles(repoPath, deploymentId);
-        // if (!seedResult.success) {
-        //     updateDeploymentStatus(deploymentId, "failed");
-        //     return { success: false, message: `Seed step failed: ${seedResult.error}`, deploymentId };
-        // }
+        console.log(`Seeding database SQL files...`);
+        const seedResult = await seedBackendSqlFiles(repoPath, deploymentId);
+        if (!seedResult.success) {
+            updateDeploymentStatus(deploymentId, "failed");
+            // return { success: false, message: `Seed step failed: ${seedResult.error}`, deploymentId };
+        }
 
         // Restart service
         console.log(`Restarting Yimaru Backend service...`);
