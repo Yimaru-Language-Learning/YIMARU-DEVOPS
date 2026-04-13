@@ -7,9 +7,11 @@ import {
     getDeployments,
     getDeploymentById,
     getCommandsByDeploymentId,
+    insertCommand,
     type Deployment,
     type Command,
 } from "./db";
+import { readdir } from "node:fs/promises";
 import {
     loadEnvConfig,
     verifySignature,
@@ -17,7 +19,7 @@ import {
     gitPullWithAuth,
     type EnvConfig,
 } from "./utils";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 
 interface GiteaWebhookPayload {
     repository?: {
@@ -113,6 +115,78 @@ function extractOrganizationAndRepo(repoPath: string, localPath: string): { orga
 
 const adminRepo = resolveRepoMetadata(env.yimaruAdminPath, "Yimaru Admin");
 const backendRepo = resolveRepoMetadata(env.yimaruBackendPath, "Yimaru Backend");
+
+async function seedBackendSqlFiles(repoPath: string, deploymentId: number): Promise<{ success: boolean; error?: string }> {
+    const seedDir = join(repoPath, "db", "data");
+    const commandLabel = "seed backend sql files";
+
+    try {
+        const fileNames = (await readdir(seedDir))
+            .filter((fileName) => fileName.endsWith(".sql"))
+            .sort((left, right) => left.localeCompare(right));
+
+        const stdoutLines: string[] = [];
+        const stderrLines: string[] = [];
+
+        for (const fileName of fileNames) {
+            const filePath = join(seedDir, fileName);
+
+            if (fileName === "007_course_management_seed.sql") {
+                stdoutLines.push(`Skipping ${filePath} (course management seed disabled)`);
+                continue;
+            }
+
+            stdoutLines.push(`Seeding ${filePath}...`);
+            const sqlContent = await Bun.file(filePath).text();
+            const proc = Bun.spawn(
+                ["sudo", "psql", "-U", "root", "-d", "gh"],
+                {
+                    stdin: Buffer.from(sqlContent),
+                    stdout: "pipe",
+                    stderr: "pipe",
+                }
+            );
+
+            const output = await new Response(proc.stdout).text();
+            const error = await new Response(proc.stderr).text();
+            await proc.exited;
+
+            if (output.trim().length > 0) {
+                stdoutLines.push(output.trimEnd());
+            }
+
+            if (error.trim().length > 0) {
+                stderrLines.push(`${filePath}:\n${error.trimEnd()}`);
+            }
+
+            if (proc.exitCode !== 0) {
+                insertCommand(
+                    deploymentId,
+                    commandLabel,
+                    stdoutLines.join("\n"),
+                    stderrLines.join("\n") || null,
+                    proc.exitCode ?? 1,
+                    false
+                );
+                return { success: false, error: `Failed seeding ${fileName}: ${error || output}` };
+            }
+        }
+
+        insertCommand(
+            deploymentId,
+            commandLabel,
+            stdoutLines.join("\n"),
+            stderrLines.join("\n") || null,
+            0,
+            true
+        );
+        return { success: true };
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        insertCommand(deploymentId, commandLabel, "", errorMessage, -1, false);
+        return { success: false, error: errorMessage };
+    }
+}
 
 // ============================================================================
 // Deploy Functions for Each Repository
@@ -235,49 +309,12 @@ async function deployYimaruBackend(
             return { success: false, message: `go mod tidy failed: ${tidyResult.error || tidyResult.output}`, deploymentId };
         }
 
-        // Stop service before DB operations
+        // Stop service before rebuilding the binary
         console.log(`Stopping Yimaru Backend service...`);
-        await execCommand("sudo systemctl stop yimaru_backend.service", undefined, deploymentId);
-
-        // Database backup → migrate → restore → seed
-        console.log(`Backing up database...`);
-        const backupResult = await execCommand("make backup", repoPath, deploymentId);
-        if (!backupResult.success) {
+        const stopResult = await execCommand("sudo systemctl stop yimaru_backend.service", undefined, deploymentId);
+        if (!stopResult.success) {
             updateDeploymentStatus(deploymentId, "failed");
-            return { success: false, message: `make backup failed: ${backupResult.error || backupResult.output}`, deploymentId };
-        }
-
-        console.log(`Running db-down...`);
-        const dbDownResult = await execCommand("make db-down", repoPath, deploymentId);
-        if (!dbDownResult.success) {
-            updateDeploymentStatus(deploymentId, "failed");
-            return { success: false, message: `make db-down failed: ${dbDownResult.error || dbDownResult.output}`, deploymentId };
-        }
-
-        console.log(`Running db-up...`);
-        const dbUpResult = await execCommand("make db-up", repoPath, deploymentId);
-        if (!dbUpResult.success) {
-            updateDeploymentStatus(deploymentId, "failed");
-            return { success: false, message: `make db-up failed: ${dbUpResult.error || dbUpResult.output}`, deploymentId };
-        }
-
-        // Wait for DB to be ready before restore
-        await execCommand("sleep 5", repoPath, deploymentId);
-
-        console.log(`Restoring database...`);
-        const restoreResult = await execCommand("make restore", repoPath, deploymentId);
-        if (!restoreResult.success) {
-            updateDeploymentStatus(deploymentId, "failed");
-            return { success: false, message: `make restore failed: ${restoreResult.error || restoreResult.output}`, deploymentId };
-        }
-
-        await execCommand("sleep 2", repoPath, deploymentId);
-
-        console.log(`Seeding data...`);
-        const seedResult = await execCommand("make seed_data", repoPath, deploymentId);
-        if (!seedResult.success) {
-            updateDeploymentStatus(deploymentId, "failed");
-            return { success: false, message: `make seed_data failed: ${seedResult.error || seedResult.output}`, deploymentId };
+            return { success: false, message: `Failed to stop service: ${stopResult.error || stopResult.output}`, deploymentId };
         }
 
         // Build Go binary
@@ -291,6 +328,13 @@ async function deployYimaruBackend(
             updateDeploymentStatus(deploymentId, "failed");
             return { success: false, message: `go build failed: ${buildResult.error || buildResult.output}`, deploymentId };
         }
+
+        // console.log(`Seeding database SQL files...`);
+        // const seedResult = await seedBackendSqlFiles(repoPath, deploymentId);
+        // if (!seedResult.success) {
+        //     updateDeploymentStatus(deploymentId, "failed");
+        //     return { success: false, message: `Seed step failed: ${seedResult.error}`, deploymentId };
+        // }
 
         // Restart service
         console.log(`Restarting Yimaru Backend service...`);
