@@ -18,9 +18,9 @@ Copy `.env.example` to `.env` and set a high-entropy webhook secret. The same se
 ```dotenv
 GITHUB_WEBHOOK_SECRET=...
 PORT=3000
-PRODUCTION_BRANCH=main
-YIMARU_ADMIN_PATH=/srv/apps/yimaru_admin
-YIMARU_BACKEND_PATH=/srv/apps/Yimaru-BackEnd
+PRODUCTION_BRANCH=production
+YIMARU_ADMIN_PATH=/home/yimaru/yimaru_admin
+YIMARU_BACKEND_PATH=/home/yimaru/Yimaru-BackEnd
 ```
 
 The old `GITEA_WEBHOOK_SECRET`, `GITEA_WEBHOOK_AUTH_HEADER`, `GITEA_USERNAME`, and `GITEA_PASSWORD` variables are no longer used.
@@ -57,18 +57,18 @@ Host github-yimaru-backend
     IdentitiesOnly yes
 ```
 
-Restrict the SSH files and point each existing checkout to its GitHub repository, substituting the exact owner and repository names:
+Restrict the SSH files and point each existing checkout to its GitHub repository:
 
 ```bash
 sudo chmod 700 /home/yimaru/.ssh
 sudo chmod 600 /home/yimaru/.ssh/config /home/yimaru/.ssh/github-yimaru-admin /home/yimaru/.ssh/github-yimaru-backend
 sudo chown -R yimaru:yimaru /home/yimaru/.ssh
 
-sudo -u yimaru git -C /srv/apps/yimaru_admin remote set-url origin git@github-yimaru-admin:OWNER/ADMIN_REPOSITORY.git
-sudo -u yimaru git -C /srv/apps/Yimaru-BackEnd remote set-url origin git@github-yimaru-backend:OWNER/BACKEND_REPOSITORY.git
+sudo -u yimaru git -C /home/yimaru/yimaru_admin remote set-url origin git@github-yimaru-admin:Yimaru-Language-Learning/YIMARU-LANGUAGE-APP-ADMIN.git
+sudo -u yimaru git -C /home/yimaru/Yimaru-BackEnd remote set-url origin git@github-yimaru-backend:Yimaru-Language-Learning/YIMARU-BACKEND.git
 
-sudo -u yimaru git -C /srv/apps/yimaru_admin fetch origin
-sudo -u yimaru git -C /srv/apps/Yimaru-BackEnd fetch origin
+sudo -u yimaru git -C /home/yimaru/yimaru_admin fetch origin
+sudo -u yimaru git -C /home/yimaru/Yimaru-BackEnd fetch origin
 ```
 
 If this runner checkout is also migrated, make its GitHub remote the canonical `origin` before updating the service.

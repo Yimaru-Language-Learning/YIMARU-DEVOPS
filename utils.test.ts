@@ -40,11 +40,11 @@ describe("evaluateGitHubWebhook", () => {
     });
 
     test("rejects malformed pushes and pushes without repository information", () => {
-        expect(evaluateGitHubWebhook("push", "not-json", "main")).toEqual({
+        expect(evaluateGitHubWebhook("push", "not-json", "production")).toEqual({
             kind: "invalid",
             error: "Invalid webhook payload: malformed JSON",
         });
-        expect(evaluateGitHubWebhook("push", JSON.stringify({ ref: "refs/heads/main" }), "main").kind).toBe("invalid");
+        expect(evaluateGitHubWebhook("push", JSON.stringify({ ref: "refs/heads/production" }), "production").kind).toBe("invalid");
     });
 
     test("ignores non-production pushes and branch deletions", () => {
@@ -52,27 +52,27 @@ describe("evaluateGitHubWebhook", () => {
             repository,
             ref: "refs/heads/feature",
             after: "feature-sha",
-        }), "main").kind).toBe("ignore");
+        }), "production").kind).toBe("ignore");
 
         expect(evaluateGitHubWebhook("push", JSON.stringify({
             repository,
-            ref: "refs/heads/main",
+            ref: "refs/heads/production",
             after: "0000000000000000000000000000000000000000",
             deleted: true,
-        }), "main").kind).toBe("ignore");
+        }), "production").kind).toBe("ignore");
     });
 
     test("uses the after SHA for a production deployment", () => {
         expect(evaluateGitHubWebhook("push", JSON.stringify({
             repository,
-            ref: "refs/heads/main",
+            ref: "refs/heads/production",
             after: "newest-commit",
             commits: [{ id: "oldest-commit" }],
-        }), "main")).toEqual({
+        }), "production")).toEqual({
             kind: "deploy",
             repoName: "Yimaru-BackEnd",
             organization: "Yimaru-Language-Learning",
-            branch: "main",
+            branch: "production",
             commitHash: "newest-commit",
         });
     });
@@ -101,31 +101,31 @@ describe("gitSyncFromOrigin", () => {
         const publisherPath = join(temporaryDirectory, "publisher");
         const checkoutPath = join(temporaryDirectory, "checkout");
 
-        runGit(["init", "--bare", "--initial-branch=main", remotePath]);
+        runGit(["init", "--bare", "--initial-branch=production", remotePath]);
         runGit(["clone", remotePath, publisherPath]);
         runGit(["-C", publisherPath, "config", "user.name", "Test User"]);
         runGit(["-C", publisherPath, "config", "user.email", "test@example.com"]);
         await writeFile(join(publisherPath, "version.txt"), "one\n");
         runGit(["-C", publisherPath, "add", "version.txt"]);
         runGit(["-C", publisherPath, "commit", "-m", "initial"]);
-        runGit(["-C", publisherPath, "push", "origin", "main"]);
+        runGit(["-C", publisherPath, "push", "origin", "production"]);
         runGit(["clone", remotePath, checkoutPath]);
 
         await writeFile(join(publisherPath, "version.txt"), "two\n");
         runGit(["-C", publisherPath, "commit", "-am", "update"]);
-        runGit(["-C", publisherPath, "push", "origin", "main"]);
+        runGit(["-C", publisherPath, "push", "origin", "production"]);
         await writeFile(join(checkoutPath, "version.txt"), "local change\n");
 
         initializeDatabase(":memory:");
-        const deploymentId = createDeployment("owner/repo", "main", "commit", "in_progress");
-        const result = await gitSyncFromOrigin(checkoutPath, deploymentId, "main");
+        const deploymentId = createDeployment("owner/repo", "production", "commit", "in_progress");
+        const result = await gitSyncFromOrigin(checkoutPath, deploymentId, "production");
 
         expect(result.success).toBe(true);
         expect(await readFile(join(checkoutPath, "version.txt"), "utf8")).toBe("two\n");
 
         const commands = getCommandsByDeploymentId(deploymentId).map((command) => command.command);
         expect(commands).toContain("git fetch origin");
-        expect(commands).toContain("git reset --hard origin/main");
+        expect(commands).toContain("git reset --hard origin/production");
         expect(commands.join("\n")).not.toContain("https://");
         expect(commands.join("\n")).not.toContain("@github.com");
     });
