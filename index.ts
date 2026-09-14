@@ -8,33 +8,19 @@ import {
     getDeploymentById,
     getCommandsByDeploymentId,
     insertCommand,
-    type Deployment,
-    type Command,
 } from "./db";
+export type { Deployment, Command } from "./db";
 import { readdir } from "node:fs/promises";
 import {
     loadEnvConfig,
     verifySignature,
+    evaluateGitHubWebhook,
+    repositoryIdentityMatches,
     execCommand,
-    gitPullWithAuth,
+    gitSyncFromOrigin,
     type EnvConfig,
 } from "./utils";
 import { basename, join } from "node:path";
-
-interface GiteaWebhookPayload {
-    repository?: {
-        name?: string;
-        owner?: {
-            login?: string;
-        };
-        full_name?: string;
-    };
-    ref?: string;
-    commits?: Array<{
-        id?: string;
-        message?: string;
-    }>;
-}
 
 // Deploy function signature
 type DeployFunction = (
@@ -61,7 +47,6 @@ initializeDatabase(process.env.DB_PATH);
 // ============================================================================
 
 interface RepoMetadata {
-    repoPath: string;
     organization: string;
     repoName: string;
 }
@@ -84,7 +69,7 @@ function resolveRepoMetadata(localPath: string, label: string): RepoMetadata {
     const repoPath = normalizeRepoPath(remoteUrl);
     const { organization, repoName } = extractOrganizationAndRepo(repoPath, localPath);
 
-    return { repoPath, organization, repoName };
+    return { organization, repoName };
 }
 
 function normalizeRepoPath(remoteUrl: string): string {
@@ -207,13 +192,10 @@ async function deployYimaruAdmin(
     console.log(`Starting deployment for Yimaru Admin (Deployment ID: ${deploymentId})...`);
 
     try {
-        const gitResult = await gitPullWithAuth(
-            adminRepo.repoPath,
+        const gitResult = await gitSyncFromOrigin(
             repoPath,
             deploymentId,
-            env.productionBranch,
-            env.giteaUsername,
-            env.giteaPassword
+            env.productionBranch
         );
         if (!gitResult.success) {
             updateDeploymentStatus(deploymentId, "failed");
@@ -281,13 +263,10 @@ async function deployYimaruBackend(
 
     try {
         // Git pull
-        const gitResult = await gitPullWithAuth(
-            backendRepo.repoPath,
+        const gitResult = await gitSyncFromOrigin(
             repoPath,
             deploymentId,
-            env.productionBranch,
-            env.giteaUsername,
-            env.giteaPassword
+            env.productionBranch
         );
         if (!gitResult.success) {
             updateDeploymentStatus(deploymentId, "failed");
@@ -375,9 +354,12 @@ const REPO_CONFIGS: RepoEntry[] = [
  */
 function findRepoEntry(repoName: string, organization: string): RepoEntry | undefined {
     return REPO_CONFIGS.find(
-        (entry) =>
-            entry.repoName === repoName &&
-            (entry.organization.length === 0 || entry.organization === organization)
+        (entry) => repositoryIdentityMatches(
+            entry.repoName,
+            entry.organization,
+            repoName,
+            organization
+        )
     );
 }
 
@@ -390,48 +372,26 @@ function findRepoEntry(repoName: string, organization: string): RepoEntry | unde
  */
 async function handleWebhook(c: Context): Promise<Response> {
     try {
-        // Get signature and auth header from headers
-        const signature = c.req.header("X-Gitea-Signature") || "";
-        const authHeader = c.req.header("Authorization") || c.req.header("X-Gitea-Auth") || "";
+        const signature = c.req.header("X-Hub-Signature-256") || "";
+        const eventName = c.req.header("X-GitHub-Event") || "";
         const payload = await c.req.text();
 
-        // Verify auth header
-        if (authHeader !== env.webhookAuthHeader) {
-            console.error("Invalid webhook auth header");
-            return c.json({ error: "Invalid authorization" }, 401);
-        }
-
-        // Verify signature
         if (!verifySignature(payload, signature, env.webhookSecret)) {
             console.error("Invalid webhook signature");
             return c.json({ error: "Invalid signature" }, 401);
         }
 
-        // Parse payload
-        const data: GiteaWebhookPayload = JSON.parse(payload);
-
-        // Extract repository information
-        const repoName = data.repository?.name;
-        const organization = data.repository?.owner?.login || data.repository?.full_name?.split("/")[0];
-        const ref = data.ref || "";
-        const commitHash = data.commits?.[0]?.id || "";
-
-        if (!repoName || !organization) {
-            return c.json({ error: "Invalid webhook payload: missing repository information" }, 400);
+        const decision = evaluateGitHubWebhook(eventName, payload, env.productionBranch);
+        if (decision.kind === "invalid") {
+            return c.json({ error: decision.error }, 400);
+        }
+        if (decision.kind === "ignore") {
+            console.log(`⚠️  ${decision.message}`);
+            return c.json({ message: decision.message }, 200);
         }
 
-        // Extract branch name from ref (e.g., "refs/heads/main" -> "main")
-        const branch = ref.replace("refs/heads/", "") || undefined;
-
-        // Only process pushes to the production branch
-        if (ref !== `refs/heads/${env.productionBranch}`) {
-            console.log(`⚠️  Ignoring push to non-production branch: ${ref}`);
-            return c.json({
-                message: `Ignoring push to ${ref}. Only the production branch (${env.productionBranch}) triggers deployments.`,
-            }, 200);
-        }
-
-        console.log(`Received webhook for ${organization}/${repoName} on ${ref} (commit: ${commitHash})`);
+        const { repoName, organization, branch, commitHash } = decision;
+        console.log(`Received GitHub webhook for ${organization}/${repoName} on ${branch} (commit: ${commitHash})`);
 
         // Find repository entry
         const entry = findRepoEntry(repoName, organization);
@@ -557,7 +517,7 @@ app.get("/api/deployments/:id", handleGetDeployment);
 
 // Webhook endpoints
 app.post("/webhook", handleWebhook);
-app.post("/webhook/gitea", handleWebhook);
+app.post("/webhook/github", handleWebhook);
 
 // 404 handler
 app.notFound((c: Context) => {
@@ -570,8 +530,8 @@ const server = Bun.serve({
     fetch: app.fetch,
 });
 
-console.log(`🚀 Gitea Webhook CD Server running on http://localhost:${server.port}`);
-console.log(`📡 Webhook endpoint: http://localhost:${server.port}/webhook`);
+console.log(`🚀 GitHub Webhook CD Server running on http://localhost:${server.port}`);
+console.log(`📡 GitHub webhook endpoint: http://localhost:${server.port}/webhook/github`);
 console.log(`❤️  Health check: http://localhost:${server.port}/health`);
 console.log(`📊 Deployments API: http://localhost:${server.port}/deployments`);
 console.log(`💾 Database: ${process.env.DB_PATH || "deployments.db"}`);

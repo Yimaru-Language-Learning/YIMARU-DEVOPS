@@ -3,9 +3,6 @@ import { insertCommand } from "./db";
 
 export interface EnvConfig {
     webhookSecret: string;
-    webhookAuthHeader: string;
-    giteaUsername: string;
-    giteaPassword: string;
     yimaruAdminPath: string;
     yimaruBackendPath: string;
     port: number;
@@ -19,10 +16,7 @@ export interface EnvConfig {
  */
 export function loadEnvConfig(): EnvConfig {
     const requiredVars = [
-        "GITEA_WEBHOOK_SECRET",
-        "GITEA_WEBHOOK_AUTH_HEADER",
-        "GITEA_USERNAME",
-        "GITEA_PASSWORD",
+        "GITHUB_WEBHOOK_SECRET",
         "YIMARU_ADMIN_PATH",
         "YIMARU_BACKEND_PATH",
     ];
@@ -60,10 +54,7 @@ export function loadEnvConfig(): EnvConfig {
     console.log(`✅ Production branch configured: ${productionBranch}`);
 
     return {
-        webhookSecret: process.env.GITEA_WEBHOOK_SECRET!,
-        webhookAuthHeader: process.env.GITEA_WEBHOOK_AUTH_HEADER!,
-        giteaUsername: process.env.GITEA_USERNAME!,
-        giteaPassword: process.env.GITEA_PASSWORD!,
+        webhookSecret: process.env.GITHUB_WEBHOOK_SECRET!,
         yimaruAdminPath: process.env.YIMARU_ADMIN_PATH!,
         yimaruBackendPath: process.env.YIMARU_BACKEND_PATH!,
         port,
@@ -72,21 +63,20 @@ export function loadEnvConfig(): EnvConfig {
 }
 
 /**
- * Verify Gitea webhook signature
+ * Verify a GitHub X-Hub-Signature-256 webhook signature.
  */
 export function verifySignature(payload: string, signature: string, webhookSecret: string): boolean {
+    if (!signature.startsWith("sha256=")) {
+        return false;
+    }
+
     const hmac = createHmac("sha256", webhookSecret);
     hmac.update(payload);
     const expectedHex = hmac.digest("hex");
     const expectedSignature = `sha256=${expectedHex}`;
 
-    // Normalize the signature - Gitea may send with or without "sha256=" prefix
-    const normalizedSignature = signature.startsWith("sha256=")
-        ? signature
-        : `sha256=${signature}`;
-
     // Ensure both buffers have the same length before comparing
-    const signatureBuffer = Buffer.from(normalizedSignature);
+    const signatureBuffer = Buffer.from(signature);
     const expectedBuffer = Buffer.from(expectedSignature);
 
     if (signatureBuffer.length !== expectedBuffer.length) {
@@ -95,6 +85,89 @@ export function verifySignature(payload: string, signature: string, webhookSecre
     }
 
     return timingSafeEqual(signatureBuffer, expectedBuffer);
+}
+
+interface GitHubWebhookPayload {
+    repository?: {
+        name?: string;
+        owner?: {
+            login?: string;
+        };
+        full_name?: string;
+    };
+    ref?: string;
+    after?: string;
+    deleted?: boolean;
+}
+
+export type GitHubWebhookDecision =
+    | { kind: "deploy"; repoName: string; organization: string; branch: string; commitHash: string }
+    | { kind: "ignore"; message: string }
+    | { kind: "invalid"; error: string };
+
+/**
+ * Parse the GitHub event and reduce it to the information needed by the deployer.
+ */
+export function evaluateGitHubWebhook(
+    eventName: string,
+    payload: string,
+    productionBranch: string
+): GitHubWebhookDecision {
+    if (eventName !== "push") {
+        return { kind: "ignore", message: `Ignoring GitHub event: ${eventName || "unknown"}` };
+    }
+
+    let data: GitHubWebhookPayload;
+    try {
+        data = JSON.parse(payload) as GitHubWebhookPayload;
+    } catch {
+        return { kind: "invalid", error: "Invalid webhook payload: malformed JSON" };
+    }
+
+    if (!data || typeof data !== "object") {
+        return { kind: "invalid", error: "Invalid webhook payload: expected a JSON object" };
+    }
+
+    const repoName = data.repository?.name;
+    const organization = data.repository?.owner?.login || data.repository?.full_name?.split("/")[0];
+    if (!repoName || !organization) {
+        return { kind: "invalid", error: "Invalid webhook payload: missing repository information" };
+    }
+
+    if (data.deleted) {
+        return { kind: "ignore", message: `Ignoring deletion of ${data.ref || "an unknown ref"}` };
+    }
+
+    const expectedRef = `refs/heads/${productionBranch}`;
+    if (data.ref !== expectedRef) {
+        return {
+            kind: "ignore",
+            message: `Ignoring push to ${data.ref || "an unknown ref"}. Only the production branch (${productionBranch}) triggers deployments.`,
+        };
+    }
+
+    if (!data.after) {
+        return { kind: "invalid", error: "Invalid webhook payload: missing after commit SHA" };
+    }
+
+    return {
+        kind: "deploy",
+        repoName,
+        organization,
+        branch: productionBranch,
+        commitHash: data.after,
+    };
+}
+
+export function repositoryIdentityMatches(
+    configuredRepoName: string,
+    configuredOrganization: string,
+    receivedRepoName: string,
+    receivedOrganization: string
+): boolean {
+    return configuredRepoName.toLowerCase() === receivedRepoName.toLowerCase()
+        && (configuredOrganization.length === 0
+            || configuredOrganization.toLowerCase() === receivedOrganization.toLowerCase());
 }
 
 /**
@@ -166,94 +239,89 @@ export async function execCommand(
     }
 }
 
-/**
- * Build authenticated git URL
- */
-export function buildAuthenticatedUrl(
-    repoPath: string,
-    username: string,
-    password: string
-): { url: string; redacted: string } {
-    const escapedUsername = encodeURIComponent(username);
-    const escapedPassword = encodeURIComponent(password);
-    const url = `https://${escapedUsername}:${escapedPassword}@${repoPath}`;
-    const redacted = `https://***:***@${repoPath}`;
-    return { url, redacted };
+async function execGitCommand(
+    args: string[],
+    localPath: string,
+    deploymentId: number,
+): Promise<{ success: boolean; output: string; error?: string }> {
+    const command = `git ${args.join(" ")}`;
+    try {
+        const proc = Bun.spawn(["git", ...args], {
+            cwd: localPath,
+            stdout: "pipe",
+            stderr: "pipe",
+        });
+        const output = await new Response(proc.stdout).text();
+        const error = await new Response(proc.stderr).text();
+        await proc.exited;
+
+        const exitCode = proc.exitCode ?? -1;
+        const success = exitCode === 0;
+        insertCommand(deploymentId, command, output, error || null, exitCode, success);
+
+        return {
+            success,
+            output,
+            error: success ? undefined : error || `Command failed with exit code ${exitCode}`,
+        };
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        insertCommand(deploymentId, command, "", errorMessage, -1, false);
+        return { success: false, output: "", error: errorMessage };
+    }
 }
 
 /**
- * Git pull with authentication (for PM2 services with writable .git)
+ * Synchronize a checkout to the configured production branch on origin.
+ * Authentication is supplied by the checkout's SSH remote/configuration.
  */
-export async function gitPullWithAuth(
-    repoPath: string,
+export async function gitSyncFromOrigin(
     localPath: string,
     deploymentId: number,
-    productionBranch: string,
-    username: string,
-    password: string
+    productionBranch: string
 ): Promise<{ success: boolean; error?: string }> {
-    const { url, redacted } = buildAuthenticatedUrl(repoPath, username, password);
-
     // Stash local changes
     console.log(`Stashing local changes...`);
-    await execCommand(`git stash save "local changes ${new Date().toISOString()}"`, localPath, deploymentId);
+    const stashResult = await execGitCommand(
+        ["stash", "push", "-m", `local changes ${new Date().toISOString()}`],
+        localPath,
+        deploymentId
+    );
+    if (!stashResult.success) {
+        return { success: false, error: `Git stash failed: ${stashResult.error || stashResult.output}` };
+    }
 
     // Reset to HEAD
     console.log(`Resetting to HEAD...`);
-    const resetResult = await execCommand("git reset --hard HEAD", localPath, deploymentId);
+    const resetResult = await execGitCommand(["reset", "--hard", "HEAD"], localPath, deploymentId);
     if (!resetResult.success) {
         return { success: false, error: `Git reset failed: ${resetResult.error || resetResult.output}` };
     }
 
     // Fetch
-    console.log(`Fetching from remote...`);
-    const fetchProc = Bun.spawn(
-        ["git", "fetch", url, productionBranch],
-        { cwd: localPath, stdout: "pipe", stderr: "pipe" }
-    );
-    const fetchOutput = await new Response(fetchProc.stdout).text();
-    const fetchError = await new Response(fetchProc.stderr).text();
-    await fetchProc.exited;
-
-    insertCommand(
-        deploymentId,
-        `git fetch ${redacted} ${productionBranch}`,
-        fetchOutput,
-        fetchError || null,
-        fetchProc.exitCode || 0,
-        fetchProc.exitCode === 0
-    );
-
-    if (fetchProc.exitCode !== 0) {
-        return { success: false, error: `Git fetch failed: ${fetchError || fetchOutput}` };
+    console.log(`Fetching from origin...`);
+    const fetchResult = await execGitCommand(["fetch", "origin"], localPath, deploymentId);
+    if (!fetchResult.success) {
+        return { success: false, error: `Git fetch failed: ${fetchResult.error || fetchResult.output}` };
     }
 
     // Checkout branch
-    await execCommand(`git checkout ${productionBranch}`, localPath, deploymentId);
-
-    // Pull
-    console.log(`Pulling latest changes...`);
-    const pullProc = Bun.spawn(
-        ["git", "pull", url, productionBranch],
-        { cwd: localPath, stdout: "pipe", stderr: "pipe" }
-    );
-    const pullOutput = await new Response(pullProc.stdout).text();
-    const pullError = await new Response(pullProc.stderr).text();
-    await pullProc.exited;
-
-    insertCommand(
-        deploymentId,
-        `git pull ${redacted} ${productionBranch}`,
-        pullOutput,
-        pullError || null,
-        pullProc.exitCode || 0,
-        pullProc.exitCode === 0
-    );
-
-    if (pullProc.exitCode !== 0) {
-        return { success: false, error: `Git pull failed: ${pullError || pullOutput}` };
+    const checkoutResult = await execGitCommand(["checkout", productionBranch], localPath, deploymentId);
+    if (!checkoutResult.success) {
+        return { success: false, error: `Git checkout failed: ${checkoutResult.error || checkoutResult.output}` };
     }
 
-    console.log(`Git pull successful`);
+    // Match the deployed checkout exactly to the remote production branch.
+    console.log(`Synchronizing to origin/${productionBranch}...`);
+    const syncResult = await execGitCommand(
+        ["reset", "--hard", `origin/${productionBranch}`],
+        localPath,
+        deploymentId
+    );
+    if (!syncResult.success) {
+        return { success: false, error: `Git synchronization failed: ${syncResult.error || syncResult.output}` };
+    }
+
+    console.log(`Git synchronization successful`);
     return { success: true };
 }
