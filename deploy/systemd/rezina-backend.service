@@ -1,0 +1,25 @@
+[Unit]
+Description=Rezina Go backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=fortune
+Group=fortune
+WorkingDirectory=/srv/rezina/current/backend
+Environment=HOME=/srv/rezina/shared
+EnvironmentFile=/srv/rezina/config/backend.env
+ExecStart=/srv/rezina/current/backend/web
+Restart=on-failure
+RestartSec=5
+UMask=0027
+CPUQuota=100%
+MemoryMax=1G
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/rezina/shared
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

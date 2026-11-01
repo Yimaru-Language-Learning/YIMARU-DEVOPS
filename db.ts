@@ -124,7 +124,7 @@ export function getDeployments(limit: number = 50, repository?: string): Deploym
         params.push(repository);
     }
 
-    query += " ORDER BY created_at DESC LIMIT ?";
+    query += " ORDER BY id DESC LIMIT ?";
     params.push(limit);
 
     const stmt = getDb().prepare(query);

@@ -1,0 +1,22 @@
+[Unit]
+Description=Rezina exported customer website
+After=network.target
+
+[Service]
+User=fortune
+Group=fortune
+WorkingDirectory=/srv/rezina/cicd
+Environment=PORT=18182
+Environment=STATIC_ROOT=/srv/rezina/current/customer
+ExecStart=/srv/rezina/tools/bin/bun static-server.ts
+Restart=on-failure
+RestartSec=5
+CPUQuota=50%
+MemoryMax=256M
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

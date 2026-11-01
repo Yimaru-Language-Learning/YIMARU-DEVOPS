@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew only the Rezina TLS certificate
+After=network-online.target
+ConditionPathExists=/srv/rezina/tls/renewal/rezina.conf
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/certbot renew --non-interactive --config-dir /srv/rezina/tls --work-dir /srv/rezina/tls-work --logs-dir /srv/rezina/tls-logs --webroot --webroot-path /srv/rezina/acme --deploy-hook "/usr/sbin/nginx -t && /bin/systemctl reload nginx"

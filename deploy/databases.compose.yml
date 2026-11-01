@@ -1,0 +1,36 @@
+name: rezina
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: rezina-postgres
+    restart: unless-stopped
+    ports: ["127.0.0.1:15432:5432"]
+    environment:
+      POSTGRES_USER: rezina
+      POSTGRES_DB: rezina
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes: ["rezina-postgres:/var/lib/postgresql/data"]
+    cpus: 0.5
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rezina -d rezina"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  mongo:
+    image: mongo:7.0.11
+    container_name: rezina-mongo
+    restart: unless-stopped
+    ports: ["127.0.0.1:17017:27017"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: rezina
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:?required}
+    volumes: ["rezina-mongo:/data/db"]
+    cpus: 0.5
+    mem_limit: 512m
+    command: ["mongod", "--wiredTigerCacheSizeGB", "0.25"]
+volumes:
+  rezina-postgres:
+    name: rezina-postgres
+  rezina-mongo:
+    name: rezina-mongo

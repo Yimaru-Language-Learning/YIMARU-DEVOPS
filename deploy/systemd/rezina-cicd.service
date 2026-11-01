@@ -1,0 +1,30 @@
+[Unit]
+Description=Rezina Gitea webhook deployments
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=fortune
+Group=fortune
+WorkingDirectory=/srv/rezina/cicd
+Environment=HOME=/srv/rezina
+Environment=NODE_ENV=production
+Environment=PATH=/srv/rezina/tools/bin:/srv/rezina/tools/go/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/srv/rezina/config/cicd.env
+ExecStart=/srv/rezina/tools/bin/bun dist/index.js
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=30
+UMask=0022
+CPUQuota=150%
+MemoryMax=4G
+IOWeight=10
+Nice=10
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/srv/rezina
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -78,7 +78,7 @@ export function DeploymentDetail({ deployment, commands }: DeploymentDetailProps
                     '<span class="badge badge-success">Success</span>' :
                     '<span class="badge badge-failed">Failed</span>'}
                                 ${command.exit_code !== null ?
-                    `<span style="margin-left: 10px; color: #999; font-size: 12px;">Exit: ${command.exit_code}</span>` :
+                    `<span style="margin-left: 10px; color: var(--ink-muted); font-size: 12px;">Exit: ${command.exit_code}</span>` :
                     ""}
                             </div>
                         </div>
